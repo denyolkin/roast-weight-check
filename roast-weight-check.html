@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Roast Weight Check</title>
+<style>
+  :root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; background:#f5f3ef; color:#24241f; }
+  body { max-width: 72rem; margin: 0 auto; padding: 1.5rem; }
+  h1,h2 { line-height:1.2; }
+  h1 { margin-bottom:.3rem; }
+  .lede { max-width: 55rem; }
+  .panel { background:white; border:1px solid #d2cec5; border-radius:.5rem; padding:1rem; margin:1rem 0; }
+  .controls { display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; }
+  button, input::file-selector-button { font:inherit; padding:.45rem .7rem; cursor:pointer; }
+  button:focus-visible, input:focus-visible { outline:3px solid #995624; outline-offset:2px; }
+  .hint { color:#48453e; }
+  .status { font-weight:600; }
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; min-width:45rem; }
+  th,td { padding:.5rem; border-bottom:1px solid #d2cec5; text-align:left; vertical-align:top; }
+  th { background:#eeeae2; }
+  td:first-child { overflow-wrap:anywhere; max-width:17rem; }
+  .issue { color:#8a2e15; font-weight:600; }
+  .ok { color:#20592b; }
+  pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+  @media (max-width: 42rem) { body { padding:.75rem; } .panel { padding:.75rem; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Roast Weight Check</h1>
+  <p class="lede">Inspect Artisan <code>.alog</code> weights on this device. Choose up to 20 files, each no larger than 1 MiB. Only gram (<code>g</code>) weights are supported: positive measurements must be between 0.000001 and 1,000,000,000 g. Zero and missing measurements stay unknown. The files are read locally and are never uploaded.</p>
+  <section class="panel" aria-label="Choose files">
+    <div class="controls">
+      <label for="files">Artisan files</label><input id="files" type="file" accept=".alog" multiple>
+      <button id="demo" type="button">Show synthetic demo</button>
+      <button id="clear" type="button">Clear</button>
+      <button id="download" type="button" disabled>Download JSON report</button>
+    </div>
+    <p class="hint">Selecting files replaces the current report. The demo is authored test data, not a customer roast. Clearing removes the selected files and report from this page.</p>
+  </section>
+  <section class="panel" aria-live="polite">
+    <h2>Report</h2><p id="status" class="status">No files selected.</p>
+    <div id="summary"></div>
+    <div class="tablewrap"><table id="results" hidden><thead><tr><th>File</th><th>UUID</th><th>Raw input / output</th><th>Cached input / output</th><th>Loss</th><th>Issues</th></tr></thead><tbody id="rows"></tbody></table></div>
+  </section>
+  <p class="hint">This is a measurement-readiness check. It does not choose an authoritative value, correct a roast, or produce inventory balances.</p>
+</main>
+<script>
+(() => {
+  'use strict';
+  const MAX_BYTES = 1048576, MAX_FILES = 20, MAX_DEPTH = 40, MAX_NODES = 100000;
+  // These limits keep all sums and loss percentages finite for up to 20 files.
+  const MIN_GRAMS = 0.000001, MAX_GRAMS = 1000000000;
+  const files = document.getElementById('files');
+  const status = document.getElementById('status');
+  const summary = document.getElementById('summary');
+  const tbody = document.getElementById('rows');
+  const table = document.getElementById('results');
+  const download = document.getElementById('download');
+  let report = null, activeSelection = null;
+
+  // Restricted Python literal reader. It accepts containers, quoted strings,
+  // finite numbers, booleans and None only. It never evaluates file text.
+  class LiteralReader {
+    constructor(text) { this.text = text; this.i = 0; this.nodes = 0; }
+    fail(message) { throw new Error(message + ' at character ' + this.i); }
+    space() { while (this.i < this.text.length && /\s/.test(this.text[this.i])) this.i++; }
+    tick(depth) { if (++this.nodes > MAX_NODES) this.fail('Too many values'); if (depth > MAX_DEPTH) this.fail('Too deeply nested'); }
+    read() { const value = this.value(0); this.space(); if (this.i !== this.text.length) this.fail('Unexpected trailing text'); return value; }
+    value(depth) {
+      this.space(); this.tick(depth);
+      const c = this.text[this.i];
+      if (c === '{') return this.dictionary(depth + 1);
+      if (c === '[') return this.sequence('[', ']', depth + 1);
+      if (c === '(') return this.sequence('(', ')', depth + 1);
+      if (c === '"' || c === "'") return this.string();
+      if (c === '-' || c === '+' || /[0-9]/.test(c || '')) return this.number();
+      for (const [word, value] of [['True',true], ['False',false], ['None',null]]) {
+        if (this.text.startsWith(word, this.i) && !/[A-Za-z0-9_]/.test(this.text[this.i + word.length] || '')) { this.i += word.length; return value; }
+      }
+      this.fail('Unsupported literal');
+    }
+    string() {
+      const quote = this.text[this.i++]; let out = '';
+      while (this.i < this.text.length) {
+        let c = this.text[this.i++];
+        if (c === quote) return out;
+        if (c !== '\\') { out += c; continue; }
+        if (this.i >= this.text.length) this.fail('Unfinished escape');
+        c = this.text[this.i++];
+        const simple = {'n':'\n','r':'\r','t':'\t','b':'\b','f':'\f','v':'\v','a':'\x07','\\':'\\',"'":"'",'"':'"'};
+        if (Object.hasOwn(simple,c)) out += simple[c];
+        else if (c === '\n') { /* Python line continuation */ }
+        else if (c === 'x' || c === 'u' || c === 'U') {
+          const width = c === 'x' ? 2 : c === 'u' ? 4 : 8;
+          const hex = this.text.slice(this.i, this.i + width);
+          if (!new RegExp('^[0-9a-fA-F]{' + width + '}$').test(hex)) this.fail('Invalid Unicode escape');
+          const code = parseInt(hex,16); if (code > 0x10ffff) this.fail('Invalid Unicode code point');
+          out += String.fromCodePoint(code); this.i += width;
+        } else this.fail('Unsupported escape');
+        if (out.length > MAX_BYTES) this.fail('String too long');
+      }
+      this.fail('Unterminated string');
+    }
+    number() {
+      const rest = this.text.slice(this.i);
+      const match = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/.exec(rest);
+      if (!match) this.fail('Invalid number');
+      const next = rest[match[0].length] || '';
+      if (/[A-Za-z0-9_.]/.test(next)) this.fail('Invalid number suffix');
+      this.i += match[0].length;
+      const value = Number(match[0]); if (!Number.isFinite(value)) this.fail('Nonfinite number');
+      if (value === 0 && /[1-9]/.test(match[0].split(/[eE]/)[0])) this.fail('Number below supported precision');
+      return value;
+    }
+    sequence(open, close, depth) {
+      this.i++; const out = []; this.space();
+      if (this.text[this.i] === close) { this.i++; return out; }
+      while (true) {
+        out.push(this.value(depth)); this.space();
+        if (this.text[this.i] === close) { this.i++; return out; }
+        if (this.text[this.i++] !== ',') this.fail('Expected comma');
+        this.space(); if (this.text[this.i] === close) { this.i++; return out; }
+      }
+    }
+    dictionary(depth) {
+      this.i++; const out = Object.create(null); this.space();
+      if (this.text[this.i] === '}') { this.i++; return out; }
+      while (true) {
+        const key = this.value(depth);
+        if (typeof key !== 'string') this.fail('Dictionary key must be a string');
+        this.space(); if (this.text[this.i++] !== ':') this.fail('Expected colon');
+        if (Object.hasOwn(out,key)) this.fail('Duplicate dictionary key');
+        out[key] = this.value(depth); this.space();
+        if (this.text[this.i] === '}') { this.i++; return out; }
+        if (this.text[this.i++] !== ',') this.fail('Expected comma');
+        this.space(); if (this.text[this.i] === '}') { this.i++; return out; }
+      }
+    }
+  }
+
+  const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const display = v => v === null ? 'unknown' : Number(v).toLocaleString('en-US',{maximumFractionDigits:6}) + ' g';
+  const measure = v => typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+  const validWeight = v => typeof v === 'number' && Number.isFinite(v) && (v === 0 || (v >= MIN_GRAMS && v <= MAX_GRAMS));
+  const weightRangeError = 'Weight must be zero (unknown) or between 0.000001 and 1,000,000,000 g';
+  const equal = (a,b) => a === b || (a !== null && b !== null && Math.abs(a-b) < 1e-9);
+  function record(name, text) {
+    const data = new LiteralReader(text).read();
+    if (!object(data)) throw new Error('Root must be a dictionary');
+    const raw = data.weight, cache = data.computed;
+    if (!Array.isArray(raw) || raw.length !== 3) throw new Error('Missing or invalid raw weight triple');
+    if (raw[2] !== 'g') throw new Error('Unsupported weight unit: ' + String(raw[2]));
+    if (raw.slice(0,2).some(v => !validWeight(v))) throw new Error('Invalid raw weight: ' + weightRangeError);
+    if (cache !== undefined && !object(cache)) throw new Error('Invalid computed cache');
+    const cached = cache ? [cache.weightin,cache.weightout] : [undefined,undefined];
+    if (cached.some(v => v !== undefined && !validWeight(v))) throw new Error('Invalid cached weight: ' + weightRangeError);
+    const rawValues = raw.slice(0,2).map(measure), cachedValues = cached.map(measure);
+    const issues = [];
+    if (rawValues[0] === null) issues.push('Unknown input');
+    if (rawValues[1] === null) issues.push('Unknown output');
+    for (let i=0; i<2; i++) if (rawValues[i] === null && cachedValues[i] !== null) issues.push((i ? 'Output' : 'Input') + ' present only in cache; not approved');
+    for (let i=0; i<2; i++) if (rawValues[i] !== null && cachedValues[i] !== null && !equal(rawValues[i],cachedValues[i])) issues.push((i ? 'Output' : 'Input') + ' raw/cache conflict');
+    const uuid = typeof data.roastUUID === 'string' && data.roastUUID.trim() ? data.roastUUID.trim() : null;
+    if (!uuid) issues.push('Missing UUID');
+    return {name,uuid,raw:rawValues,cached:cachedValues,issues,duplicate:false,uuidConflict:false,loss:null,lossPercent:null};
+  }
+  function prepare(items) {
+    const seen = new Map(), ids = new Map();
+    for (const item of items) {
+      if (item.error) continue;
+      const prior = seen.get(item.text);
+      if (prior) { item.row.duplicate = true; item.row.issues.push('Identical duplicate of ' + prior.row.name); }
+      else seen.set(item.text,item);
+      if (item.row.uuid) {
+        const group = ids.get(item.row.uuid) || []; group.push(item); ids.set(item.row.uuid,group);
+      }
+    }
+    for (const group of ids.values()) {
+      if (new Set(group.map(item => item.text)).size > 1) for (const item of group) {
+        item.row.uuidConflict = true; item.row.issues.push('UUID reused with different contents');
+      }
+    }
+    let input = 0, output = 0, inputCount = 0, outputCount = 0, pairCount = 0, pairLoss = 0;
+    for (const item of items) {
+      if (item.error) continue;
+      const r = item.row;
+      if (r.duplicate || r.uuidConflict) continue;
+      const conflict = [0,1].map(i => r.raw[i] !== null && r.cached[i] !== null && !equal(r.raw[i],r.cached[i]));
+      const valid = [0,1].map(i => !conflict[i] && r.raw[i] !== null);
+      if (valid[0]) { input += r.raw[0]; inputCount++; }
+      if (valid[1]) { output += r.raw[1]; outputCount++; }
+      if (valid[0] && valid[1]) {
+        r.loss = r.raw[0] - r.raw[1]; r.lossPercent = (r.loss/r.raw[0])*100;
+        pairLoss += r.loss; pairCount++;
+        if (r.loss < 0) r.issues.push('Output exceeds input');
+      }
+    }
+    return {format:'Roast Weight Check report v1', generatedAt:new Date().toISOString(), boundary:'Artisan .alog; grams only; positive weights from 0.000001 to 1000000000 g; zero means unknown; raw/cache conflicts and UUID conflicts excluded from aggregates', totals:{knownInputGrams:inputCount?input:null,knownInputCount:inputCount,knownOutputGrams:outputCount?output:null,knownOutputCount:outputCount,completePairCount:pairCount,completePairLossGrams:pairCount?pairLoss:null}, files:items.map(item => item.error ? {name:item.name,error:item.error} : item.row)};
+  }
+  function cell(tr,value,cls) { const td=document.createElement('td'); td.textContent=value; if(cls) td.className=cls; tr.append(td); }
+  function render(items) {
+    report = prepare(items);
+    tbody.replaceChildren(); summary.replaceChildren();
+    const t=report.totals;
+    status.textContent = items.length + ' file' + (items.length===1?'':'s') + ' inspected; ' + items.filter(x=>x.error).length + ' rejected.';
+    const p=document.createElement('p');
+    p.textContent='Known input: '+display(t.knownInputGrams)+' across '+t.knownInputCount+' records. Known output: '+display(t.knownOutputGrams)+' across '+t.knownOutputCount+' records. Complete pairs: '+t.completePairCount+'; pair loss: '+display(t.completePairLossGrams)+'. Totals omit conflicts and identical duplicates. Different counts must not be treated as a matched inventory balance.';
+    summary.append(p);
+    for (const item of items) {
+      const tr=document.createElement('tr'); const r=item.row;
+      cell(tr,item.name);
+      if (item.error) { cell(tr,'—');cell(tr,'—');cell(tr,'—');cell(tr,'—');cell(tr,item.error,'issue'); }
+      else {
+        cell(tr,r.uuid || 'missing');
+        cell(tr,r.raw.map(display).join(' / '));
+        cell(tr,r.cached.map(display).join(' / '));
+        cell(tr,r.loss === null ? 'unknown' : display(r.loss)+' ('+r.lossPercent.toFixed(6)+'%)');
+        cell(tr,r.issues.length ? r.issues.join('; ') : 'None',r.issues.length?'issue':'ok');
+      }
+      tbody.append(tr);
+    }
+    table.hidden=false; download.disabled=false;
+    // Drop file contents after deriving the report.
+    items.length=0;
+  }
+  function cancelSelection() {
+    if (!activeSelection) return;
+    activeSelection.cancelled = true;
+    activeSelection.items.length = 0;
+    activeSelection.selected.length = 0;
+    activeSelection = null;
+  }
+  async function inspect(selection) {
+    const selected = Array.from(selection);
+    clear();
+    if (selected.length > MAX_FILES) { status.textContent='Rejected: choose no more than 20 files.'; return; }
+    const operation = {selected, items:[], cancelled:false};
+    activeSelection = operation;
+    status.textContent = 'Reading selected files…';
+    try {
+      for (const file of operation.selected) {
+        if (operation.cancelled) return;
+        const item = {name:file.name};
+        try {
+          if (!file.name.toLowerCase().endsWith('.alog')) throw new Error('Only .alog files are supported');
+          if (file.size > MAX_BYTES) throw new Error('File exceeds 1 MiB');
+          let text = await file.text();
+          // Clear can run while this read is pending. Discard its result before parsing.
+          if (operation.cancelled) { text = null; return; }
+          item.text = text;
+          if (new TextEncoder().encode(item.text).length > MAX_BYTES) throw new Error('Decoded file exceeds 1 MiB');
+          item.row = record(item.name,item.text);
+        } catch(e) {
+          if (operation.cancelled) return;
+          item.error=e instanceof Error ? e.message : 'Unreadable file'; delete item.text;
+        }
+        operation.items.push(item);
+      }
+      if (!operation.cancelled) render(operation.items);
+    } finally {
+      operation.items.length = 0;
+      operation.selected.length = 0;
+      if (activeSelection === operation) activeSelection = null;
+    }
+  }
+  function clear() { cancelSelection(); files.value=''; report=null; status.textContent='No files selected.'; summary.replaceChildren();tbody.replaceChildren();table.hidden=true;download.disabled=true; }
+  files.addEventListener('change',()=>{ if(files.files.length) inspect(files.files); else clear(); });
+  document.getElementById('clear').addEventListener('click',clear);
+  document.getElementById('demo').addEventListener('click',()=>{
+    clear();
+    const samples=[
+      {name:'synthetic-missing.alog',text:"{'roastUUID':'synthetic-1','weight':[0,0,'g'],'computed':{'weightin':0,'weightout':0}}"},
+      {name:'synthetic-complete.alog',text:"{'roastUUID':'synthetic-2','weight':[130,115.2,'g'],'computed':{'weightin':130,'weightout':115.2}}"},
+      {name:'synthetic-conflict.alog',text:"{'roastUUID':'synthetic-3','weight':[140,115.2,'g'],'computed':{'weightin':130,'weightout':115.2}}"}
+    ];
+    render(samples.map(s=>({...s,row:record(s.name,s.text)})));
+  });
+  download.addEventListener('click',()=>{
+    if (!report) return;
+    const blob=new Blob([JSON.stringify(report,null,2)+'\n'],{type:'application/json'});
+    const url=URL.createObjectURL(blob), a=document.createElement('a');
+    a.href=url; a.download='roast-weight-check-report.json';a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
+})();
+</script>
+</body>
+</html>
