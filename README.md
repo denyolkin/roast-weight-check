@@ -4,6 +4,8 @@ A free standalone HTML utility for inspecting weights in Artisan `.alog` files. 
 
 ## Use
 
+[Open the public entry page](https://denyolkin.github.io/roast-weight-check/) and select **Open Roast Weight Check** to use the same utility in your browser. You can also download the unchanged v0.1.0 file for offline use. The hosted page has no analytics; page requests reach GitHub Pages, but selected files stay on your device.
+
 Save `roast-weight-check.html` to your computer and open it in desktop Chrome. The HTML file contains the application source; no installation or build is needed. Choose your `.alog` files, inspect the report, then select **Download JSON report** to save it. **Show synthetic demo** lets you try the report without a roast file.
 
 Selecting another set of files replaces the report. **Clear** removes the selected files and report from the page. The file picker may show no filename after reading while the completed report remains visible. On narrow screens, scroll the results table horizontally to see Loss and Issues.
@@ -27,3 +29,7 @@ The checked browser is desktop Chrome 154.0.8037.97. Checks covered file selecti
 If you choose to open a repository issue, describe whether the report helped or what failed. Include your browser version. Do not attach roast files or reports containing private information.
 
 The software and embedded synthetic demo use the MIT License. See `LICENSE` and `NOTICES.md`. `SHA256SUMS` lists the package file hashes, excluding the checksum file itself.
+
+## Measuring initial interest
+
+Release asset download counts are a distribution proxy, not unique users or completed checks. Keep dated snapshots and known QA downloads separately, and report the HTML asset separately from license and documentation downloads. Repository traffic does not measure hosted application use. Voluntary issues may supply usefulness evidence; no automated in-app usage tracking is present. Unknown customer use, geography and paid demand remain unknown.

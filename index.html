@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Check weights in Artisan .alog roast files for missing values and conflicting measurements. Free, local file inspection with a JSON report.">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>Roast Weight Check | Inspect Artisan roast weights</title>
+<style>
+:root{font:17px/1.6 system-ui,sans-serif;color:#24241f;background:#f5f3ef}body{max-width:48rem;margin:auto;padding:3rem 1.25rem}h1{font-size:clamp(2rem,6vw,3rem);line-height:1.1}h2{font-size:1.3rem}a{color:#713e19}a:focus-visible{outline:3px solid #995624;outline-offset:4px}.actions{display:flex;flex-wrap:wrap;gap:1rem;margin:2rem 0}.primary{background:#713e19;color:white;padding:.8rem 1.2rem;border-radius:.4rem;text-decoration:none}.secondary{padding:.8rem 0}.note{border-left:3px solid #c2b09a;padding-left:1rem}footer{border-top:1px solid #d2cec5;margin-top:3rem;padding-top:1rem;font-size:.9rem}
+</style>
+</head>
+<body><main>
+<p>For Artisan users</p><h1>Check roast weights before relying on them.</h1>
+<p>Inspect existing <code>.alog</code> files for missing weights and disagreements between raw and cached measurements. Save the findings as a JSON report.</p>
+<div class="actions"><a class="primary" href="roast-weight-check.html">Open Roast Weight Check</a><a class="secondary" href="https://github.com/denyolkin/roast-weight-check/releases/download/v0.1.0/roast-weight-check.html">Download for offline use</a></div>
+<p class="note">Free. No account required. Selected roast files are processed on your device and never uploaded. The tool has no analytics. The host receives ordinary page requests.</p>
+<h2>Try it without a roast file</h2><p>Open the tool and choose <strong>Show synthetic demo</strong>. To inspect your own files, choose <strong>Artisan files</strong>, review the flagged rows, then select <strong>Download JSON report</strong>.</p>
+<h2>What the report can tell you</h2><p>See missing or zero measurements, raw/cache disagreements and incomplete pairs. Conflicts stay unresolved: the tool does not choose an authoritative value or repair the file. Known totals may cover different records and are not an inventory balance.</p>
+<h2>Supported scope</h2><p>Desktop Chrome; up to 20 files, each at most 1 MiB; gram weights only. Compatibility with every Artisan version and other browsers is not established. This is a weight inspection utility, not Artisan or an inventory system.</p>
+<h2>Did the report help?</h2><p><a href="https://github.com/denyolkin/roast-weight-check/issues">Share useful feedback or report a problem</a>. Include your browser and what happened. Do not attach private roast files or reports. GitHub sign-in is required to submit an issue.</p>
+</main><footer><a href="https://github.com/denyolkin/roast-weight-check">Source and instructions</a> · <a href="LICENSE">MIT License</a> · <a href="NOTICES.md">Notices</a> · <a href="https://github.com/denyolkin/roast-weight-check/releases/tag/v0.1.0">v0.1.0 release</a></footer></body></html>
